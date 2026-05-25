@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NexCalc ✦ AI Calculator</title>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/recharts@2.12.7/umd/Recharts.js"></script>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#0a0a1a; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; -webkit-font-smoothing:antialiased; }
+    button { font-family:inherit; cursor:pointer; transition:all 0.15s ease; }
+    button:hover { opacity:0.85; transform:scale(0.97); }
+    input, select { font-family:inherit; }
+    input:focus { outline:none; }
+    ::-webkit-scrollbar { width:4px; }
+    ::-webkit-scrollbar-track { background:transparent; }
+    ::-webkit-scrollbar-thumb { background:rgba(0,245,255,0.3); border-radius:2px; }
+    @keyframes load { from{width:0} to{width:100%} }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.6} }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+    const { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } = Recharts;
+
+    // ── Constants ──────────────────────────────────────────────────────────────
+
+    const MODES = ["Standard","Scientific","Business","Student","Creator","Freelancer"];
+
+    const THEMES = {
+      cyber:  { bg:"#0a0a1a", panel:"rgba(15,15,40,0.85)",   accent:"#00f5ff", accent2:"#bf5af2", text:"#e0e8ff", sub:"#7a8ab0", border:"rgba(0,245,255,0.18)",  glow:"0 0 24px rgba(0,245,255,0.18)"  },
+      aurora: { bg:"#050f1a", panel:"rgba(5,20,35,0.9)",      accent:"#00ffa3", accent2:"#ff6b9d", text:"#d0ffe8", sub:"#5a9a7a", border:"rgba(0,255,163,0.18)",  glow:"0 0 24px rgba(0,255,163,0.15)"  },
+      solar:  { bg:"#1a0a00", panel:"rgba(30,15,0,0.88)",     accent:"#ff9500", accent2:"#ff375f", text:"#ffe8cc", sub:"#a07040", border:"rgba(255,149,0,0.2)",   glow:"0 0 24px rgba(255,149,0,0.15)"  },
+      light:  { bg:"#f0f2f8", panel:"rgba(255,255,255,0.82)", accent:"#5e5ce6", accent2:"#bf5af2", text:"#1a1a2e", sub:"#6e7090", border:"rgba(94,92,230,0.18)",  glow:"0 0 20px rgba(94,92,230,0.12)"  },
+    };
+
+    const SCI_BUTTONS = ["sin","cos","tan","log","ln","√","x²","xʸ","π","e","(",")","%","1/x","!"];
+
+    const CURRENCY_RATES = { USD:1, BDT:110, EUR:0.92, GBP:0.79, JPY:149, INR:83, CAD:1.36, AUD:1.53 };
+
+    const UNITS = {
+      length: { m:1, km:0.001, cm:100, mm:1000, ft:3.281, inch:39.37, mile:0.000621 },
+      weight: { kg:1, g:1000, lb:2.205, oz:35.27, ton:0.001 },
+      temp:   { C:1, F:1, K:1 },
+    };
+
+    const TIMEZONES = [
+      "Asia/Dhaka","America/New_York","Europe/London",
+      "Asia/Tokyo","America/Los_Angeles","Europe/Paris",
+      "Asia/Dubai","Asia/Kolkata"
+    ];
+
+    const CALC_BUTTONS = ["7","8","9","÷","4","5","6","×","1","2","3","−","0",".","=","+","C","⌫","( )","±"];
+
+    const BUSINESS_FORMULAS = [
+      { label:"ROI",    formula:"(profit/cost)*100" },
+      { label:"Margin", formula:"(revenue-cost)/revenue*100" },
+      { label:"ROAS",   formula:"revenue/ad_spend" },
+      { label:"CPM",    formula:"cost/impressions*1000" },
+    ];
+
+    const CREATOR_FORMULAS = [
+      { label:"AdSense",  formula:"views*0.003" },
+      { label:"Merch",    formula:"subs*0.05" },
+      { label:"Sponsor",  formula:"views*0.01" },
+      { label:"RPM calc", formula:"cpm*impressions/1000" },
+    ];
+
+    // ── Helpers ────────────────────────────────────────────────────────────────
+
+    function factorial(n) { return n <= 1 ? 1 : n * factorial(n - 1); }
+
+    function safeEval(expr) {
+      try {
+        let e = expr
+          .replace(/sin\(/g,  "Math.sin(")
+          .replace(/cos\(/g,  "Math.cos(")
+          .replace(/tan\(/g,  "Math.tan(")
+          .replace(/log\(/g,  "Math.log10(")
+          .replace(/ln\(/g,   "Math.log(")
+          .replace(/√\(/g,    "Math.sqrt(")
+          .replace(/π/g,      "Math.PI")
+          .replace(/e(?!\+|-|\d)/g, "Math.E")
+          .replace(/(\d+)!/g, "factorial($1)")
+          .replace(/(\d+(?:\.\d+)?)\s*\^\s*(\d+(?:\.\d+)?)/g, "Math.pow($1,$2)");
+        return Function("factorial", `"use strict"; return (${e})`)(factorial);
+      } catch { return null; }
+    }
+
+    function getGraphData(expr) {
+      const pts = [];
+      for (let x = -10; x <= 10; x += 0.5) {
+        const y = safeEval(expr.replace(/x/g, `(${x})`));
+        if (y !== null && isFinite(y) && Math.abs(y) < 1e6)
+          pts.push({ x: parseFloat(x.toFixed(2)), y: parseFloat(y.toFixed(4)) });
+      }
+      return pts;
+    }
+
+    function getAIFallback(expr, result, mode) {
+      const num = parseFloat(result);
+      const map = {
+        Standard:   `You calculated ${expr} = ${result}. The result is ${num > 0 ? "positive" : num < 0 ? "negative" : "zero"}.`,
+        Scientific: `${expr} = ${result}. ${expr.includes("sin")||expr.includes("cos")||expr.includes("tan") ? "Trig functions use radians. " : ""}${expr.includes("log") ? "log() is base-10. " : ""}${expr.includes("ln") ? "ln() is natural log." : ""}`,
+        Business:   `ROI view: ${result}. ${num > 0 ? "Positive returns detected." : "Review your cost structure."} Benchmark against your industry average.`,
+        Student:    `Steps: 1) Start with ${expr}. 2) Apply PEMDAS/BODMAS. 3) Final answer: ${result}.`,
+        Creator:    `If ${result} = monthly views → AdSense ≈ $${(num*0.003).toFixed(2)}, sponsorship ≈ $${(num*0.01).toFixed(2)}/video.`,
+        Freelancer: `Rate: ${result}. Monthly (160h) = $${(num*160).toFixed(0)}, after 25% tax = $${(num*160*0.75).toFixed(0)}, in BDT = ৳${(num*160*0.75*110).toFixed(0)}.`,
+      };
+      return map[mode] || map.Standard;
+    }
+
+    // ── Main App ───────────────────────────────────────────────────────────────
+
+    function App() {
+      const [theme,      setTheme]      = useState("cyber");
+      const [mode,       setMode]       = useState("Standard");
+      const [expr,       setExpr]       = useState("");
+      const [result,     setResult]     = useState("");
+      const [aiText,     setAiText]     = useState("Enter a calculation — I'll explain it like a teacher.");
+      const [history,    setHistory]    = useState([]);
+      const [histSearch, setHistSearch] = useState("");
+      const [favorites,  setFavorites]  = useState([]);
+      const [showGraph,  setShowGraph]  = useState(false);
+      const [graphData,  setGraphData]  = useState([]);
+      const [tab,        setTab]        = useState("calc");
+      const [loading,    setLoading]    = useState(false);
+      const [startup,    setStartup]    = useState(true);
+      const [particles,  setParticles]  = useState([]);
+      const [currency,   setCurrency]   = useState({ from:"USD", to:"BDT", amount:"1" });
+      const [unit,       setUnit]       = useState({ type:"length", from:"m", to:"ft", amount:"1" });
+      const [timezone,   setTimezone]   = useState({ from:"Asia/Dhaka", to:"America/New_York" });
+
+      const inputRef = useRef(null);
+      const T = THEMES[theme];
+
+      // Startup + particles
+      useEffect(() => {
+        const ps = Array.from({ length:18 }, (_, i) => ({
+          id:i, x:Math.random()*100, y:Math.random()*100,
+          dx:(Math.random()-0.5)*0.3, dy:(Math.random()-0.5)*0.3,
+          size:Math.random()*3+1, op:Math.random()*0.5+0.1,
+        }));
+        setParticles(ps);
+        setTimeout(() => setStartup(false), 2200);
+      }, []);
+
+      useEffect(() => {
+        if (startup) return;
+        const id = setInterval(() => {
+          setParticles(ps => ps.map(p => ({
+            ...p, x:((p.x+p.dx+100)%100), y:((p.y+p.dy+100)%100),
+          })));
+        }, 60);
+        return () => clearInterval(id);
+      }, [startup]);
+
+      // Keyboard shortcuts
+      const compute = useCallback(async () => {
+        if (!expr.trim()) return;
+        setLoading(true);
+        const hasX = /x/.test(expr);
+        let res = "";
+        if (hasX) {
+          setGraphData(getGraphData(expr));
+          setShowGraph(true);
+          res = `f(x) = ${expr}`;
+        } else {
+          const val = safeEval(expr);
+          res = val !== null
+            ? (Number.isInteger(val) ? val.toString() : parseFloat(val.toFixed(10)).toString())
+            : "Error";
+        }
+        setResult(res);
+        setHistory(h => [{ expr, result:res, mode, time:new Date().toLocaleTimeString() }, ...h.slice(0,49)]);
+        try {
+          const resp = await fetch("https://api.anthropic.com/v1/messages", {
+            method:"POST",
+            headers:{ "Content-Type":"application/json" },
+            body: JSON.stringify({
+              model:"claude-sonnet-4-20250514",
+              max_tokens:1000,
+              system:`You are NexCalc's AI assistant. Mode: ${mode}. Explain calculations in 2-4 sentences. Be helpful, smart, slightly futuristic. If expression has x, describe the graph shape.`,
+              messages:[{ role:"user", content:`Expression: ${expr}\nResult: ${res}\nMode: ${mode}\nExplain this.` }]
+            })
+          });
+          const data = await resp.json();
+          setAiText(data?.content?.[0]?.text || getAIFallback(expr, res, mode));
+        } catch {
+          setAiText(getAIFallback(expr, res, mode));
+        }
+        setLoading(false);
+      }, [expr, mode]);
+
+      useEffect(() => {
+        const fn = (e) => {
+          if (e.key === "Enter")  compute();
+          if (e.key === "Escape") { setExpr(""); setResult(""); }
+        };
+        window.addEventListener("keydown", fn);
+        return () => window.removeEventListener("keydown", fn);
+      }, [compute]);
+
+      // Converters
+      const convertCurrency = () => {
+        const amt = parseFloat(currency.amount) || 0;
+        return ((amt / CURRENCY_RATES[currency.from]) * CURRENCY_RATES[currency.to]).toFixed(4);
+      };
+      const convertUnit = () => {
+        const amt = parseFloat(unit.amount) || 0;
+        const uType = UNITS[unit.type];
+        if (unit.type === "temp") {
+          let c = unit.from==="F" ? (amt-32)/1.8 : unit.from==="K" ? amt-273.15 : amt;
+          return (unit.to==="F" ? c*1.8+32 : unit.to==="K" ? c+273.15 : c).toFixed(3);
+        }
+        return ((amt / uType[unit.from]) * uType[unit.to]).toFixed(6);
+      };
+      const calcTimezone = () => {
+        try {
+          return new Intl.DateTimeFormat("en-US", {
+            timeZone:timezone.to, hour:"2-digit", minute:"2-digit",
+            second:"2-digit", hour12:false, day:"numeric", month:"short"
+          }).format(new Date());
+        } catch { return "Invalid timezone"; }
+      };
+
+      // Button handlers
+      const append = (v) => {
+        if (v==="x²")  { setExpr(x=>x+"^2"); return; }
+        if (v==="xʸ")  { setExpr(x=>x+"^");  return; }
+        if (v==="1/x") { setExpr(x=>`1/(${x})`); return; }
+        const needParen = ["sin","cos","tan","log","ln","√"].includes(v);
+        setExpr(x => x + (needParen ? v+"(" : v));
+        inputRef.current?.focus();
+      };
+      const handleBtn = (v) => {
+        if (v==="C")   { setExpr(""); setResult(""); setShowGraph(false); return; }
+        if (v==="⌫")   { setExpr(x=>x.slice(0,-1)); return; }
+        if (v==="=")   { compute(); return; }
+        if (v==="( )") { setExpr(x => { const o=(x.match(/\(/g)||[]).length, c=(x.match(/\)/g)||[]).length; return x+(o>c?")":"("); }); return; }
+        if (v==="÷")   { setExpr(x=>x+"/"); return; }
+        if (v==="×")   { setExpr(x=>x+"*"); return; }
+        if (v==="−")   { setExpr(x=>x+"-"); return; }
+        if (v==="±")   { setExpr(x=>x.startsWith("-")?x.slice(1):"-"+x); return; }
+        setExpr(x=>x+v);
+        inputRef.current?.focus();
+      };
+
+      // Styles
+      const s = {
+        wrap:       { minHeight:"100vh", background:T.bg, position:"relative", overflow:"hidden" },
+        particles:  { position:"fixed", inset:0, pointerEvents:"none", zIndex:0 },
+        container:  { position:"relative", zIndex:1, maxWidth:960, margin:"0 auto", padding:"16px", width:"100%" },
+        header:     { textAlign:"center", marginBottom:20 },
+        logo:       { fontSize:28, fontWeight:700, background:`linear-gradient(135deg,${T.accent},${T.accent2})`, WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", letterSpacing:2 },
+        tagline:    { fontSize:12, color:T.sub, letterSpacing:3, textTransform:"uppercase", marginTop:2 },
+        modeBar:    { display:"flex", gap:6, justifyContent:"center", flexWrap:"wrap", marginBottom:16 },
+        modeBtn: m  => ({ padding:"6px 14px", borderRadius:20, border:`1px solid ${m===mode?T.accent:T.border}`, background:m===mode?`${T.accent}22`:"transparent", color:m===mode?T.accent:T.sub, fontSize:11, fontWeight:600, cursor:"pointer", letterSpacing:1, textTransform:"uppercase" }),
+        panel:      { background:T.panel, borderRadius:20, border:`1px solid ${T.border}`, backdropFilter:"blur(20px)", boxShadow:T.glow, padding:20, marginBottom:16 },
+        display:    { background:"linear-gradient(135deg,rgba(0,0,0,0.4),rgba(0,0,0,0.2))", borderRadius:14, padding:"16px 20px", marginBottom:16, border:`1px solid ${T.border}`, minHeight:90 },
+        exprText:   { color:T.sub, fontSize:14, minHeight:20, wordBreak:"break-all" },
+        resultText: { color:T.accent, fontSize:36, fontWeight:300, letterSpacing:1, minHeight:44, transition:"all 0.3s" },
+        inputRow:   { display:"flex", gap:8, marginBottom:14 },
+        input:      { flex:1, background:"rgba(0,0,0,0.3)", border:`1px solid ${T.border}`, borderRadius:12, padding:"10px 16px", color:T.text, fontSize:16, caretColor:T.accent },
+        calcBtn:    { padding:"10px 18px", borderRadius:12, border:`1px solid ${T.accent}`, background:`${T.accent}22`, color:T.accent, fontWeight:700, fontSize:16 },
+        grid:       { display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:8 },
+        btn: v      => { const isOp=["÷","×","−","+","="].includes(v), isCl=["C","⌫"].includes(v); return { padding:"14px 8px", borderRadius:12, border:`1px solid ${isOp?T.accent2+"55":isCl?T.accent+"33":T.border}`, background:isOp?`${T.accent2}22`:isCl?`${T.accent}11`:"rgba(255,255,255,0.04)", color:isOp?T.accent2:isCl?T.accent:T.text, fontSize:16, fontWeight:isOp?700:400, textAlign:"center" }; },
+        sciGrid:    { display:"grid", gridTemplateColumns:"repeat(5,1fr)", gap:6, marginBottom:12 },
+        sciBtn:     { padding:"8px 4px", borderRadius:10, border:`1px solid ${T.accent2}33`, background:`${T.accent2}11`, color:T.accent2, fontSize:12, cursor:"pointer", textAlign:"center" },
+        aiBox:      { background:`linear-gradient(135deg,${T.accent}11,${T.accent2}11)`, borderRadius:14, padding:16, border:`1px solid ${T.accent}22`, color:T.text, fontSize:13, lineHeight:1.7 },
+        aiLabel:    { color:T.accent, fontSize:11, fontWeight:700, letterSpacing:2, marginBottom:8, textTransform:"uppercase" },
+        tabs:       { display:"flex", gap:4, marginBottom:16, flexWrap:"wrap" },
+        tabBtn: t   => ({ padding:"7px 14px", borderRadius:20, border:`1px solid ${t===tab?T.accent:T.border}`, background:t===tab?`${T.accent}22`:"transparent", color:t===tab?T.accent:T.sub, fontSize:11, cursor:"pointer", fontWeight:600, letterSpacing:1, textTransform:"uppercase" }),
+        themeRow:   { display:"flex", gap:6, justifyContent:"flex-end", marginBottom:12 },
+        themeBtn: t => ({ width:20, height:20, borderRadius:"50%", border:t===theme?`2px solid ${T.text}`:"2px solid transparent", background:THEMES[t].accent, cursor:"pointer" }),
+        histItem:   { padding:"10px 14px", borderRadius:10, border:`1px solid ${T.border}`, background:"rgba(255,255,255,0.03)", marginBottom:6, cursor:"pointer" },
+        row:        { display:"flex", gap:10, alignItems:"center", marginBottom:10, flexWrap:"wrap" },
+        label:      { color:T.sub, fontSize:12, minWidth:40 },
+        sel:        { background:"rgba(0,0,0,0.4)", border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 10px", color:T.text, fontSize:13 },
+        numIn:      { background:"rgba(0,0,0,0.4)", border:`1px solid ${T.border}`, borderRadius:8, padding:"6px 10px", color:T.text, fontSize:13, width:90 },
+        convResult: { color:T.accent, fontSize:22, fontWeight:600, padding:"10px 0" },
+        graphWrap:  { marginTop:12, borderRadius:12, overflow:"hidden", border:`1px solid ${T.border}` },
+        favBtn:     { padding:"6px 12px", borderRadius:8, border:`1px solid ${T.accent2}44`, background:`${T.accent2}11`, color:T.accent2, fontSize:11, cursor:"pointer" },
+        footer:     { textAlign:"center", color:T.sub, fontSize:10, letterSpacing:2, padding:"8px 0" },
+      };
+
+      // Startup screen
+      if (startup) return (
+        <div style={{...s.wrap, display:"flex", alignItems:"center", justifyContent:"center"}}>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:52, fontWeight:700, background:"linear-gradient(135deg,#00f5ff,#bf5af2)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", letterSpacing:4, animation:"pulse 1s ease-in-out infinite"}}>NEX</div>
+            <div style={{fontSize:18, color:"#00f5ff", letterSpacing:8, marginTop:4}}>CALC</div>
+            <div style={{marginTop:24, color:"#7a8ab0", fontSize:13, letterSpacing:3}}>INITIALIZING AI ENGINE...</div>
+            <div style={{marginTop:16, width:200, height:2, background:"rgba(0,245,255,0.15)", borderRadius:2, overflow:"hidden", margin:"16px auto 0"}}>
+              <div style={{height:"100%", background:"linear-gradient(90deg,#00f5ff,#bf5af2)", animation:"load 2s ease-in-out forwards", borderRadius:2}}></div>
+            </div>
+          </div>
+        </div>
+      );
+
+      // Main UI
+      return (
+        <div style={s.wrap}>
+          <svg style={s.particles} aria-hidden="true">
+            {particles.map(p => <circle key={p.id} cx={`${p.x}%`} cy={`${p.y}%`} r={p.size} fill={T.accent} opacity={p.op}/>)}
+          </svg>
+
+          <div style={s.container}>
+            {/* Theme dots */}
+            <div style={s.themeRow}>
+              {Object.keys(THEMES).map(t => <button key={t} style={s.themeBtn(t)} onClick={()=>setTheme(t)} title={t}/>)}
+            </div>
+
+            {/* Header */}
+            <div style={s.header}>
+              <div style={s.logo}>✦ NEXCALC</div>
+              <div style={s.tagline}>AI Smart Calculation Assistant</div>
+            </div>
+
+            {/* Mode bar */}
+            <div style={s.modeBar}>
+              {MODES.map(m => <button key={m} style={s.modeBtn(m)} onClick={()=>setMode(m)}>{m}</button>)}
+            </div>
+
+            {/* Tabs */}
+            <div style={s.tabs}>
+              {["calc","convert","history","favorites"].map(t => <button key={t} style={s.tabBtn(t)} onClick={()=>setTab(t)}>{t}</button>)}
+            </div>
+
+            {/* ── CALC TAB ── */}
+            {tab==="calc" && (
+              <div style={s.panel}>
+                <div style={s.display}>
+                  <div style={s.exprText}>{expr||"0"}</div>
+                  <div style={s.resultText}>{result||"—"}</div>
+                </div>
+                <div style={s.inputRow}>
+                  <input ref={inputRef} style={s.input} value={expr}
+                    onChange={e=>setExpr(e.target.value)}
+                    onKeyDown={e=>{if(e.key==="Enter")compute();}}
+                    placeholder={mode==="Student"?"Enter equation to solve...":mode==="Creator"?"Try: 100000*0.003 for YouTube revenue...":"Type or use buttons..."}
+                  />
+                  <button style={s.calcBtn} onClick={compute}>=</button>
+                </div>
+
+                {(mode==="Scientific"||mode==="Student") && (
+                  <div style={s.sciGrid}>
+                    {SCI_BUTTONS.map(b => <button key={b} style={s.sciBtn} onClick={()=>append(b)}>{b}</button>)}
+                  </div>
+                )}
+
+                {mode==="Business" && (
+                  <div style={{marginBottom:12}}>
+                    <div style={{color:T.sub,fontSize:11,marginBottom:6,letterSpacing:2}}>QUICK FORMULAS</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {BUSINESS_FORMULAS.map(f => <button key={f.label} style={{...s.sciBtn,fontSize:10,padding:"5px 8px"}} onClick={()=>setExpr(f.formula)}>{f.label}</button>)}
+                    </div>
+                  </div>
+                )}
+
+                {mode==="Creator" && (
+                  <div style={{marginBottom:12}}>
+                    <div style={{color:T.sub,fontSize:11,marginBottom:6,letterSpacing:2}}>CREATOR TOOLS</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                      {CREATOR_FORMULAS.map(f => <button key={f.label} style={{...s.sciBtn,fontSize:10,padding:"5px 8px"}} onClick={()=>setExpr(f.formula)}>{f.label}</button>)}
+                    </div>
+                  </div>
+                )}
+
+                <div style={s.grid}>
+                  {CALC_BUTTONS.map(b => <button key={b} style={s.btn(b)} onClick={()=>handleBtn(b)}>{b}</button>)}
+                </div>
+
+                {showGraph && graphData.length>0 && (
+                  <div style={s.graphWrap}>
+                    <ResponsiveContainer width="100%" height={180}>
+                      <LineChart data={graphData} margin={{top:10,right:10,bottom:0,left:0}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={`${T.accent}22`}/>
+                        <XAxis dataKey="x" tick={{fill:T.sub,fontSize:10}} tickLine={false}/>
+                        <YAxis tick={{fill:T.sub,fontSize:10}} tickLine={false} width={35}/>
+                        <Tooltip contentStyle={{background:T.panel,border:`1px solid ${T.border}`,borderRadius:8,color:T.text,fontSize:12}}/>
+                        <Line type="monotone" dataKey="y" stroke={T.accent} strokeWidth={2} dot={false} activeDot={{r:4,fill:T.accent2}}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                )}
+
+                <div style={{marginTop:14}}>
+                  <div style={s.aiLabel}>⟡ AI Insight {loading?"— thinking...":""}</div>
+                  <div style={s.aiBox}>
+                    {loading ? <span style={{color:T.sub}}>Analyzing your calculation...</span> : aiText}
+                  </div>
+                  {result && result!=="Error" && (
+                    <div style={{marginTop:8,display:"flex",gap:8}}>
+                      <button style={s.favBtn} onClick={()=>setFavorites(f=>[...f,{expr,result,mode}])}>♡ Save formula</button>
+                      <button style={{...s.favBtn,color:T.sub}} onClick={()=>{if(!/x/.test(expr)){setExpr(result);setResult("");}}} >↗ Use result</button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ── CONVERT TAB ── */}
+            {tab==="convert" && (
+              <div style={s.panel}>
+                <div style={{marginBottom:20}}>
+                  <div style={s.aiLabel}>⟡ Currency Converter</div>
+                  <div style={s.row}>
+                    <span style={s.label}>Amount</span>
+                    <input style={s.numIn} type="number" value={currency.amount} onChange={e=>setCurrency(c=>({...c,amount:e.target.value}))}/>
+                    <select style={s.sel} value={currency.from} onChange={e=>setCurrency(c=>({...c,from:e.target.value}))}>
+                      {Object.keys(CURRENCY_RATES).map(k=><option key={k}>{k}</option>)}
+                    </select>
+                    <span style={{color:T.sub}}>→</span>
+                    <select style={s.sel} value={currency.to} onChange={e=>setCurrency(c=>({...c,to:e.target.value}))}>
+                      {Object.keys(CURRENCY_RATES).map(k=><option key={k}>{k}</option>)}
+                    </select>
+                  </div>
+                  <div style={s.convResult}>{convertCurrency()} {currency.to}</div>
+                </div>
+
+                <div style={{marginBottom:20}}>
+                  <div style={s.aiLabel}>⟡ Unit Converter</div>
+                  <div style={s.row}>
+                    <select style={s.sel} value={unit.type} onChange={e=>{const t=e.target.value;setUnit({type:t,from:Object.keys(UNITS[t])[0],to:Object.keys(UNITS[t])[1],amount:"1"});}}>
+                      {Object.keys(UNITS).map(k=><option key={k}>{k}</option>)}
+                    </select>
+                    <input style={s.numIn} type="number" value={unit.amount} onChange={e=>setUnit(u=>({...u,amount:e.target.value}))}/>
+                    <select style={s.sel} value={unit.from} onChange={e=>setUnit(u=>({...u,from:e.target.value}))}>
+                      {Object.keys(UNITS[unit.type]).map(k=><option key={k}>{k}</option>)}
+                    </select>
+                    <span style={{color:T.sub}}>→</span>
+                    <select style={s.sel} value={unit.to} onChange={e=>setUnit(u=>({...u,to:e.target.value}))}>
+                      {Object.keys(UNITS[unit.type]).map(k=><option key={k}>{k}</option>)}
+                    </select>
+                  </div>
+                  <div style={s.convResult}>{convertUnit()} {unit.to}</div>
+                </div>
+
+                <div>
+                  <div style={s.aiLabel}>⟡ Timezone Calculator</div>
+                  <div style={s.row}>
+                    <select style={s.sel} value={timezone.from} onChange={e=>setTimezone(z=>({...z,from:e.target.value}))}>
+                      {TIMEZONES.map(tz=><option key={tz}>{tz}</option>)}
+                    </select>
+                    <span style={{color:T.sub}}>→</span>
+                    <select style={s.sel} value={timezone.to} onChange={e=>setTimezone(z=>({...z,to:e.target.value}))}>
+                      {TIMEZONES.map(tz=><option key={tz}>{tz}</option>)}
+                    </select>
+                  </div>
+                  <div style={s.convResult}>{calcTimezone()}</div>
+                </div>
+              </div>
+            )}
+
+            {/* ── HISTORY TAB ── */}
+            {tab==="history" && (
+              <div style={s.panel}>
+                <div style={s.aiLabel}>⟡ Calculation History</div>
+                <input style={{...s.input,marginBottom:12,width:"100%",boxSizing:"border-box"}}
+                  placeholder="Search history..." value={histSearch}
+                  onChange={e=>setHistSearch(e.target.value)}
+                />
+                {history.filter(h=>h.expr.includes(histSearch)||h.result.includes(histSearch)).map((h,i)=>(
+                  <div key={i} style={s.histItem} onClick={()=>{setExpr(h.expr);setResult(h.result);setTab("calc");}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{color:T.sub,fontSize:12}}>{h.expr} — {h.mode}</div>
+                        <div style={{color:T.accent,fontSize:16,fontWeight:600}}>{h.result}</div>
+                      </div>
+                      <div style={{color:T.sub,fontSize:11}}>{h.time}</div>
+                    </div>
+                  </div>
+                ))}
+                {history.length===0 && <div style={{color:T.sub,textAlign:"center",padding:30}}>No calculations yet.</div>}
+              </div>
+            )}
+
+            {/* ── FAVORITES TAB ── */}
+            {tab==="favorites" && (
+              <div style={s.panel}>
+                <div style={s.aiLabel}>⟡ Saved Formulas</div>
+                {favorites.map((f,i)=>(
+                  <div key={i} style={s.histItem} onClick={()=>{setExpr(f.expr);setResult(f.result);setTab("calc");}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                      <div>
+                        <div style={{color:T.sub,fontSize:12}}>{f.expr} — {f.mode}</div>
+                        <div style={{color:T.accent,fontSize:16,fontWeight:600}}>{f.result}</div>
+                      </div>
+                      <button style={{...s.favBtn,fontSize:11}} onClick={e=>{e.stopPropagation();setFavorites(fvs=>fvs.filter((_,j)=>j!==i));}}>✕</button>
+                    </div>
+                  </div>
+                ))}
+                {favorites.length===0 && <div style={{color:T.sub,textAlign:"center",padding:30}}>Save formulas from the Calculator tab.</div>}
+              </div>
+            )}
+
+            <div style={s.footer}>NEXCALC v3.0 · AI-POWERED · PRESS ENTER TO CALCULATE</div>
+          </div>
+        </div>
+      );
+    }
+
+    // Mount
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<App />);
+  </script>
+</body>
+</html>
